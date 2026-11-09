@@ -6,6 +6,11 @@ on:
   schedule:
     - cron: "0 */5 * * *"
   workflow_dispatch: # "Run workflow" button for starting it by hand
+    inputs:
+      test_alert:
+        description: "Only send a test alert"
+        type: boolean
+        default: false
 
 # Only one watcher at a time; a scheduled run that overlaps waits for the current one.
 concurrency:
@@ -22,8 +27,11 @@ jobs:
         with:
           python-version: "3.12"
       - name: Watch for free appointments
-        run: python watcher.py --max-minutes 295
+        run: python watcher.py ${{ inputs.test_alert && '--test' || '--max-minutes 295' }}
         env:
+          # Telegram is used when TELEGRAM_BOT_TOKEN is set; otherwise email (SMTP_*).
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}

@@ -8,7 +8,7 @@ the link in the email.
 Usage:
     python watcher.py           # watch forever
     python watcher.py --once    # check once, print the result, exit
-    python watcher.py --test-email
+    python watcher.py --test     # send a test alert
     python watcher.py --max-minutes 295   # used by the GitHub Actions workflow
 """
 
@@ -72,6 +72,16 @@ def check_availability():
 def load_config():
     config = configparser.ConfigParser()
     # In the cloud (GitHub Actions) the settings come from environment variables / secrets.
+    if os.environ.get("TELEGRAM_BOT_TOKEN"):
+        config["telegram"] = {
+            "bot_token": os.environ["TELEGRAM_BOT_TOKEN"],
+            "chat_id": os.environ.get("TELEGRAM_CHAT_ID", ""),
+        }
+        config["watch"] = {}
+        for key in ("interval_seconds", "reminder_minutes"):
+            if os.environ.get(f"WATCH_{key.upper()}"):
+                config["watch"][key] = os.environ[f"WATCH_{key.upper()}"]
+        return config
     if os.environ.get("SMTP_HOST"):
         config["smtp"] = {
             key: os.environ[f"SMTP_{key.upper()}"]
@@ -87,6 +97,23 @@ def load_config():
         sys.exit(f"Missing {CONFIG_PATH}. Copy config.example.ini to config.ini and fill it in.")
     config.read(CONFIG_PATH, encoding="utf-8")
     return config
+
+
+def notify(config, subject, text):
+    """Sends the alert by Telegram when configured, otherwise by email."""
+    if config.has_section("telegram"):
+        send_telegram(config, f"{subject}\n\n{text}")
+    else:
+        send_email(config, subject, text)
+
+
+def send_telegram(config, text):
+    telegram = config["telegram"]
+    url = f"https://api.telegram.org/bot{telegram['bot_token']}/sendMessage"
+    body = urllib.parse.urlencode({"chat_id": telegram["chat_id"], "text": text}).encode()
+    with urllib.request.urlopen(url, data=body, timeout=30) as response:
+        response.read()
+    log("Telegram message sent.")
 
 
 def send_email(config, subject, text):
@@ -147,7 +174,7 @@ def watch(config, max_minutes=None):
             if last_state != "available" or now - last_alert >= reminder:
                 log("FREE APPOINTMENTS FOUND!")
                 beep()
-                send_email(
+                notify(
                     config,
                     "Einbürgerung Ulm: freie Termine verfügbar!",
                     "The watcher found free appointments for 'Anliegen rund um die Einbürgerung'.\n\n"
@@ -165,7 +192,7 @@ def watch(config, max_minutes=None):
             if state == "unknown":
                 errors += 1
             if errors >= error_limit and not error_mail_sent:
-                send_email(
+                notify(
                     config,
                     "Einbürgerung Ulm watcher: checks are failing",
                     f"The last {errors} checks failed or returned an unexpected page.\n"
@@ -187,7 +214,8 @@ def watch(config, max_minutes=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--once", action="store_true", help="check once and exit")
-    parser.add_argument("--test-email", action="store_true", help="send a test email and exit")
+    parser.add_argument("--test", "--test-email", dest="test", action="store_true",
+                        help="send a test alert (Telegram or email) and exit")
     parser.add_argument("--max-minutes", type=int, help="stop watching after this many minutes")
     args = parser.parse_args()
 
@@ -196,8 +224,8 @@ def main():
         log(f"Result: {state}")
         return
     config = load_config()
-    if args.test_email:
-        send_email(config, "Einbürgerung Ulm watcher: test", "Email alerts work.\n")
+    if args.test:
+        notify(config, "Einbürgerung Ulm watcher: test", "Alerts work.\n")
         return
     try:
         watch(config, args.max_minutes)
