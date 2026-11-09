@@ -1,0 +1,31 @@
+# Runs the watcher on GitHub's servers, so it works while your laptop is off.
+# Each run watches for ~5 hours (a job may last at most 6), and a new run starts every 5 hours.
+name: Einbuergerung watcher
+
+on:
+  schedule:
+    - cron: "0 */5 * * *"
+  workflow_dispatch: # "Run workflow" button for starting it by hand
+
+# Only one watcher at a time; a scheduled run that overlaps waits for the current one.
+concurrency:
+  group: watcher
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Watch for free appointments
+        run: python watcher.py --max-minutes 295
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_TO: ${{ secrets.SMTP_TO }}
