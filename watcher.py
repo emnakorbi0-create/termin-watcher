@@ -225,7 +225,12 @@ def main():
         return
     config = load_config()
     if args.test:
-        notify(config, "Einbürgerung Ulm watcher: test", "Alerts work.\n")
+        try:
+            state, _ = check_availability()
+        except Exception as exc:
+            state = f"error ({exc})"
+        log(f"Site check: {state}")
+        notify(config, "Einbürgerung Ulm watcher: test", f"Alerts work. Site check result: {state}\n")
         return
     try:
         watch(config, args.max_minutes)
