@@ -149,9 +149,11 @@ def beep():
 def watch(config, max_minutes=None):
     deadline = time.time() + max_minutes * 60 if max_minutes else None
     watch_cfg = config["watch"] if config.has_section("watch") else {}
-    interval = max(120, int(watch_cfg.get("interval_seconds", 300)))
+    # 60 s is the floor: faster gains nothing (booking by hand takes longer) and risks a block.
+    interval = max(60, int(watch_cfg.get("interval_seconds", 300)))
     reminder = int(watch_cfg.get("reminder_minutes", 30)) * 60
-    error_limit = 6
+    # Warn after ~15 minutes of failures, whatever the interval.
+    error_limit = max(3, 900 // interval)
 
     last_state = None
     last_alert = 0.0
@@ -204,7 +206,7 @@ def watch(config, max_minutes=None):
         if state != "error":
             last_state = state
         # Jitter so the requests don't hit the server on an exact rhythm.
-        pause = interval + random.randint(0, 60)
+        pause = interval + random.randint(0, max(10, interval // 5))
         if deadline and time.time() + pause > deadline:
             log("Time limit reached.")
             return
