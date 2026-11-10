@@ -1,10 +1,13 @@
 # Runs the watcher on GitHub's servers, so it works while your laptop is off.
-# Each run watches for ~5 hours (a job may last at most 6), and a new run starts every 5 hours.
+# Each run watches for ~5 hours (a job may last at most 6). The schedule fires every hour so
+# a run is always queued behind the current one and starts as soon as it ends: GitHub often
+# starts scheduled runs late, and a sparser schedule left gaps of hours without checks.
+# Minute 17 avoids the busy top of the hour, where GitHub's delays are worst.
 name: Einbuergerung watcher
 
 on:
   schedule:
-    - cron: "0 */5 * * *"
+    - cron: "17 * * * *"
   workflow_dispatch: # "Run workflow" button for starting it by hand
     inputs:
       test_alert:
@@ -13,6 +16,8 @@ on:
         default: false
 
 # Only one watcher at a time; a scheduled run that overlaps waits for the current one.
+# GitHub keeps at most one waiting run per group and drops older waiting ones, so the
+# hourly schedule never piles up.
 concurrency:
   group: watcher
   cancel-in-progress: false
