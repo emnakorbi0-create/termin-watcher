@@ -1,7 +1,8 @@
 # Runs the watcher on GitHub's servers, so it works while your laptop is off.
-# Each run watches for ~5 hours (a job may last at most 6). The schedule fires every hour so
-# a run is always queued behind the current one and starts as soon as it ends: GitHub often
-# starts scheduled runs late, and a sparser schedule left gaps of hours without checks.
+# Each run watches for ~5 hours (a job may last at most 6) and, as its last step, starts
+# the next run itself, so the runs follow each other without gaps. GitHub's schedule is
+# not reliable enough for that on its own - it dropped hourly runs and left gaps of hours -
+# so it is only the backup that restarts the chain if it ever breaks.
 # Minute 17 avoids the busy top of the hour, where GitHub's delays are worst.
 name: Einbuergerung watcher
 
@@ -14,13 +15,21 @@ on:
         description: "Only send a test alert"
         type: boolean
         default: false
+      minutes:
+        description: "How long this run watches (the next run is always the full length)"
+        type: number
+        default: 295
 
-# Only one watcher at a time; a scheduled run that overlaps waits for the current one.
-# GitHub keeps at most one waiting run per group and drops older waiting ones, so the
-# hourly schedule never piles up.
+# Only one watcher at a time; a run started while another is active waits for it.
+# GitHub keeps at most one waiting run per group and drops older waiting ones, so runs
+# never pile up.
 concurrency:
   group: watcher
   cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write # lets the last step start the next run
 
 jobs:
   watch:
@@ -32,7 +41,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Watch for free appointments
-        run: python watcher.py ${{ inputs.test_alert && '--test' || '--max-minutes 295' }}
+        run: python watcher.py ${{ inputs.test_alert && '--test' || format('--max-minutes {0}', inputs.minutes || 295) }}
         env:
           # Telegram is used when TELEGRAM_BOT_TOKEN is set; otherwise email (SMTP_*).
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -43,3 +52,10 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           SMTP_TO: ${{ secrets.SMTP_TO }}
+      # Also after a failed watch step, but not when the run was cancelled by hand
+      # (cancelling is how you stop it) and not after a test alert.
+      - name: Start the next run
+        if: ${{ !cancelled() && !inputs.test_alert }}
+        run: gh workflow run watch.yml --repo "$GITHUB_REPOSITORY" --ref main
+        env:
+          GH_TOKEN: ${{ github.token }}
