@@ -18,8 +18,10 @@ import http.cookiejar
 import os
 import random
 import smtplib
+import ssl
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -50,8 +52,25 @@ def log(message):
 
 def check_availability():
     """Returns ("available" | "none" | "unknown", page_html)."""
+    try:
+        return fetch_result(ssl.create_default_context())
+    except urllib.error.URLError as exc:
+        if not isinstance(exc.reason, ssl.SSLCertVerificationError):
+            raise
+    # The site served an incomplete certificate chain for ~3 hours on 2026-11-12 (browsers
+    # fill the gap, Python doesn't). The check only reads a public page and sends nothing
+    # personal, so reading it unverified beats missing slots; a verified read is always tried first.
+    log("Site certificate could not be verified - checking without verification.")
+    unverified = ssl.create_default_context()
+    unverified.check_hostname = False
+    unverified.verify_mode = ssl.CERT_NONE
+    return fetch_result(unverified)
+
+
+def fetch_result(ssl_context):
     opener = urllib.request.build_opener(
-        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
+        urllib.request.HTTPSHandler(context=ssl_context),
     )
     opener.addheaders = [("User-Agent", USER_AGENT), ("Accept-Language", "de-DE,de;q=0.9")]
 
@@ -164,12 +183,21 @@ def watch(config, max_minutes=None):
     while True:
         try:
             state, _ = check_availability()
-            errors = 0
-            error_mail_sent = False
         except Exception as exc:
             state = "error"
+            log(f"Check failed: {exc}")
+
+        if state in ("error", "unknown"):
             errors += 1
-            log(f"Check failed ({errors} in a row): {exc}")
+        else:
+            errors = 0
+            if error_mail_sent:
+                notify(
+                    config,
+                    "Einbürgerung Ulm watcher: checks work again",
+                    "The site answers normally again; the watcher is back to its normal checks.\n",
+                )
+                error_mail_sent = False
 
         if state == "available":
             now = time.time()
@@ -191,8 +219,6 @@ def watch(config, max_minutes=None):
             log("Unexpected page - the site may have changed.")
 
         if state in ("error", "unknown"):
-            if state == "unknown":
-                errors += 1
             if errors >= error_limit and not error_mail_sent:
                 notify(
                     config,
