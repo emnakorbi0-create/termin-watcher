@@ -52,6 +52,15 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           SMTP_TO: ${{ secrets.SMTP_TO }}
+      # The result pages saved when slots were seen, for checking what the watcher saw.
+      - name: Keep the result pages of found slots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: found-pages-${{ github.run_id }}
+          path: found-*.html
+          if-no-files-found: ignore
+          retention-days: 14
       # Also after a failed watch step, but not when the run was cancelled by hand
       # (cancelling is how you stop it) and not after a test alert.
       - name: Start the next run

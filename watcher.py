@@ -17,6 +17,7 @@ import configparser
 import http.cookiejar
 import os
 import random
+import re
 import smtplib
 import ssl
 import sys
@@ -86,6 +87,37 @@ def fetch_result(ssl_context):
         return "available", html
     # The site changed or the session failed: don't claim slots we can't see.
     return "unknown", html
+
+
+def describe_slots(html):
+    """Dates (dd.mm.yyyy) on the result page with the number of times shown for each."""
+    text = re.sub(r"<[^>]+>", " ", html)
+    dates = re.findall(r"\b\d{2}\.\d{2}\.\d{4}\b", text)
+    times = re.findall(r"\b\d{1,2}:\d{2}\b", text)
+    if not dates:
+        return "Could not read dates from the page."
+    counts = {}
+    for date in dates:
+        counts[date] = counts.get(date, 0) + 1
+    listed = ", ".join(f"{date} ({n}x)" for date, n in counts.items())
+    return f"Dates on the page: {listed}. Times shown: {len(times)}."
+
+
+def german_time():
+    """Now in Ulm's time zone; the GitHub runner's clock is UTC."""
+    try:
+        from zoneinfo import ZoneInfo
+
+        return datetime.now(ZoneInfo("Europe/Berlin"))
+    except Exception:  # no time zone data (e.g. Windows without tzdata)
+        return datetime.now()
+
+
+def save_page(html):
+    """Keeps the result page for diagnosis; the workflow uploads found-*.html with the run."""
+    path = Path(f"found-{datetime.now():%Y%m%d-%H%M%S}.html")
+    path.write_text(html, encoding="utf-8")
+    log(f"Saved the result page as {path}.")
 
 
 def load_config():
@@ -182,9 +214,9 @@ def watch(config, max_minutes=None):
     log(f"Watching every ~{interval}s. Stop with Ctrl+C.")
     while True:
         try:
-            state, _ = check_availability()
+            state, html = check_availability()
         except Exception as exc:
-            state = "error"
+            state, html = "error", ""
             log(f"Check failed: {exc}")
 
         if state in ("error", "unknown"):
@@ -203,16 +235,33 @@ def watch(config, max_minutes=None):
             now = time.time()
             if last_state != "available" or now - last_alert >= reminder:
                 log("FREE APPOINTMENTS FOUND!")
+                save_page(html)
                 beep()
                 notify(
                     config,
                     "Einbürgerung Ulm: freie Termine verfügbar!",
-                    "The watcher found free appointments for 'Anliegen rund um die Einbürgerung'.\n\n"
+                    f"Found at {german_time():%H:%M}. {describe_slots(html)}\n\n"
                     f"Book now: {START_URL}\n\n"
                     "Steps: tick 'Anliegen rund um die Einbürgerung' -> Weiter -> "
                     "Bürgerdienste -> Weiter -> pick a time -> enter your details.\n",
                 )
                 last_alert = now
+                # Single freed-up slots are often taken within a minute; say so instead of
+                # leaving a stale alert.
+                time.sleep(20)
+                try:
+                    recheck, _ = check_availability()
+                except Exception:
+                    recheck = "error"
+                if recheck == "none":
+                    log("Gone again on the re-check.")
+                    notify(
+                        config,
+                        "Einbürgerung Ulm: Termin schon wieder weg",
+                        "20 seconds later the appointments were already taken. "
+                        "The watcher keeps looking.\n",
+                    )
+                    state = "none"
         elif state == "none":
             log("No free appointments.")
         elif state == "unknown":
